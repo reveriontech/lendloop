@@ -1,0 +1,138 @@
+{
+  "name": "LendLoop - Daily Overdue Reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 9 AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.CONVEX_SITE_URL }}/api/overdue-loans",
+        "options": {
+          "timeout": 10000
+        },
+        "authentication": "none"
+      },
+      "id": "fetch-overdue",
+      "name": "Fetch Overdue Loans",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [470, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "const loans = $input.first().json;\n\nif (!Array.isArray(loans) || loans.length === 0) {\n  return [];\n}\n\nreturn loans.map(loan => ({\n  json: {\n    borrowRequestId: loan._id,\n    borrowerName: loan.borrowerName,\n    toolName: loan.toolName,\n    dueDate: loan.dueDate,\n    lenderName: loan.lenderName,\n    daysOverdue: Math.floor((Date.now() - new Date(loan.dueDate).getTime()) / (1000 * 60 * 60 * 24))\n  }\n}));"
+      },
+      "id": "parse-overdue",
+      "name": "Parse Overdue Loans",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const loan = $input.first().json;\nconst message = `Reminder: \"${loan.toolName}\" was due on ${loan.dueDate} (${loan.daysOverdue} days overdue). Please return it to ${loan.lenderName}.`;\n\nconsole.log(`[LendLoop Overdue Reminder] To: ${loan.borrowerName} - ${message}`);\n\nreturn [{ json: { ...loan, reminderMessage: message, reminderSentAt: new Date().toISOString() } }];"
+      },
+      "id": "send-reminder",
+      "name": "Send Reminder (Mock)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.LENDLOOP_CALLBACK_URL }}/api/n8n/callback",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"borrowRequestId\": \"{{ $json.borrowRequestId }}\",\n  \"type\": \"overdue_reminder\",\n  \"message\": \"{{ $json.reminderMessage }}\",\n  \"idempotencyKey\": \"overdue-{{ $json.borrowRequestId }}-{{ new Date().toISOString().split('T')[0] }}\"\n}",
+        "options": {
+          "timeout": 10000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "authentication": "none"
+      },
+      "id": "write-back",
+      "name": "Write Back to LendLoop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1130, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// HMAC signing for write-back\nconst crypto = require('crypto');\nconst secret = $env.N8N_HMAC_SECRET;\nconst today = new Date().toISOString().split('T')[0];\n\nconst body = JSON.stringify({\n  borrowRequestId: $json.borrowRequestId,\n  type: 'overdue_reminder',\n  message: $json.reminderMessage,\n  idempotencyKey: `overdue-${$json.borrowRequestId}-${today}`\n});\n\nconst timestamp = Date.now().toString();\nconst data = `${timestamp}.${body}`;\nconst signature = crypto.createHmac('sha256', secret).update(data).digest('hex');\n\nreturn [{ json: { ...$json, _hmac_signature: signature, _hmac_timestamp: timestamp, _hmac_body: body } }];"
+      },
+      "id": "sign-writeback",
+      "name": "Sign Write-Back",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1020, 300]
+    }
+  ],
+  "connections": {
+    "Daily 9 AM Trigger": {
+      "main": [
+        [{ "node": "Fetch Overdue Loans", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Overdue Loans": {
+      "main": [
+        [{ "node": "Parse Overdue Loans", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Overdue Loans": {
+      "main": [
+        [{ "node": "Send Reminder (Mock)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Reminder (Mock)": {
+      "main": [
+        [{ "node": "Sign Write-Back", "type": "main", "index": 0 }]
+      ]
+    },
+    "Sign Write-Back": {
+      "main": [
+        [{ "node": "Write Back to LendLoop", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "lendloop-error-workflow"
+  },
+  "pinData": {},
+  "tags": [
+    { "name": "LendLoop" },
+    { "name": "overdue-reminders" },
+    { "name": "scheduled" }
+  ]
+}

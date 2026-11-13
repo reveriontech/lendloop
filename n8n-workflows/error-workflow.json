@@ -1,0 +1,39 @@
+{
+  "name": "LendLoop - Error Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const error = $input.first().json;\n\nconst summary = {\n  workflowName: error.workflow?.name || 'Unknown',\n  workflowId: error.workflow?.id || 'Unknown',\n  executionId: error.execution?.id || 'Unknown',\n  errorMessage: error.execution?.error?.message || 'No error message',\n  errorNode: error.execution?.lastNodeExecuted || 'Unknown',\n  timestamp: new Date().toISOString(),\n  retryUrl: error.execution?.url || null\n};\n\nconsole.error(`[LendLoop Error] Workflow '${summary.workflowName}' failed at node '${summary.errorNode}': ${summary.errorMessage}`);\n\nreturn [{ json: summary }];"
+      },
+      "id": "log-error",
+      "name": "Log Error Details",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [{ "node": "Log Error Details", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "tags": [
+    { "name": "LendLoop" },
+    { "name": "error-handling" }
+  ]
+}

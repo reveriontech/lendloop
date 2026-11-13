@@ -1,0 +1,126 @@
+{
+  "name": "LendLoop - Borrow Request Notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-borrow-webhook",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "lendloop-borrow-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst secret = $env.N8N_HMAC_SECRET;\nconst signature = $input.first().headers['x-signature'];\nconst timestamp = $input.first().headers['x-timestamp'];\nconst body = JSON.stringify($input.first().body);\n\n// Replay protection: reject if older than 5 minutes\nconst age = Math.abs(Date.now() - parseInt(timestamp, 10));\nif (age > 5 * 60 * 1000) {\n  throw new Error('Request expired (replay protection)');\n}\n\nconst data = `${timestamp}.${body}`;\nconst expected = crypto.createHmac('sha256', secret).update(data).digest('hex');\n\nconst sigBuf = Buffer.from(signature, 'hex');\nconst expectedBuf = Buffer.from(expected, 'hex');\n\nif (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {\n  throw new Error('Invalid HMAC signature');\n}\n\nreturn [{ json: { ...($input.first().body), verified: true } }];"
+      },
+      "id": "verify-hmac",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{ $json.event }}",
+              "rightValue": "borrow_request_created",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-event",
+      "name": "Route by Event",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $input.first().json.event;\nconst requestId = $input.first().json.requestId;\nconst toolId = $input.first().json.toolId;\n\nlet subject, message;\n\nswitch (event) {\n  case 'borrow_request_created':\n    subject = 'New Borrow Request';\n    message = `A new borrow request (${requestId}) was created for tool ${toolId}.`;\n    break;\n  case 'borrow_request_approved':\n    subject = 'Borrow Request Approved';\n    message = `Borrow request ${requestId} has been approved.`;\n    break;\n  case 'borrow_request_declined':\n    subject = 'Borrow Request Declined';\n    message = `Borrow request ${requestId} has been declined.`;\n    break;\n  case 'loan_started':\n    subject = 'Loan Started';\n    message = `The tool for request ${requestId} has been picked up.`;\n    break;\n  case 'loan_returned':\n    subject = 'Tool Returned';\n    message = `The tool for request ${requestId} has been returned.`;\n    break;\n  default:\n    subject = `LendLoop Event: ${event}`;\n    message = `Event ${event} for request ${requestId}.`;\n}\n\nreturn [{ json: { subject, message, event, requestId, toolId, timestamp: new Date().toISOString() } }];"
+      },
+      "id": "format-notification",
+      "name": "Format Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $input.first().json.event;\nconst requestId = $input.first().json.requestId;\n\nreturn [{ json: { subject: `LendLoop: ${event}`, message: `Status change event '${event}' for request ${requestId}.`, event, requestId, timestamp: new Date().toISOString() } }];"
+      },
+      "id": "format-status-change",
+      "name": "Format Status Change",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mock notification logger — replace with email/Slack/Discord node in production\nconst data = $input.first().json;\nconsole.log(`[LendLoop Notification] ${data.subject}: ${data.message}`);\nreturn [{ json: { ...data, notified: true, notifiedAt: new Date().toISOString(), channel: 'mock_log' } }];"
+      },
+      "id": "send-notification",
+      "name": "Send Notification (Mock)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1130, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [{ "node": "Verify HMAC Signature", "type": "main", "index": 0 }]
+      ]
+    },
+    "Verify HMAC Signature": {
+      "main": [
+        [{ "node": "Route by Event", "type": "main", "index": 0 }]
+      ]
+    },
+    "Route by Event": {
+      "main": [
+        [{ "node": "Format Notification", "type": "main", "index": 0 }],
+        [{ "node": "Format Status Change", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format Notification": {
+      "main": [
+        [{ "node": "Send Notification (Mock)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format Status Change": {
+      "main": [
+        [{ "node": "Send Notification (Mock)", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "lendloop-error-workflow"
+  },
+  "pinData": {},
+  "tags": [
+    { "name": "LendLoop" },
+    { "name": "notifications" }
+  ]
+}
