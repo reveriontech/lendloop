@@ -2,7 +2,7 @@
 
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import { SignInButton, SignedIn, SignedOut } from "@clerk/nextjs";
+import { Show, SignInButton } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,18 +21,18 @@ export default function HomeContent() {
             <Wrench className="size-6 text-primary" />
             <span className="text-xl font-bold">LendLoop</span>
           </div>
-          <SignedOut>
+          <Show when="signed-out">
             <SignInButton mode="modal">
               <Button>Sign in to lend or borrow</Button>
             </SignInButton>
-          </SignedOut>
-          <SignedIn>
+          </Show>
+          <Show when="signed-in">
             <Link href="/dashboard">
               <Button>
                 Go to Dashboard <ArrowRight className="ml-1 size-4" />
               </Button>
             </Link>
-          </SignedIn>
+          </Show>
         </div>
       </header>
 
@@ -47,13 +47,13 @@ export default function HomeContent() {
             LendLoop connects neighbors to share tools. List your power drill,
             borrow a pressure washer, and keep things out of landfills.
           </p>
-          <SignedOut>
+          <Show when="signed-out">
             <SignInButton mode="modal">
               <Button size="lg" className="mt-8">
                 Get Started
               </Button>
             </SignInButton>
-          </SignedOut>
+          </Show>
         </div>
 
         <section>
