@@ -1,3 +1,8 @@
+# Local n8n for LendLoop. Start it with the values from .env.local:
+#   docker compose --env-file .env.local up -d
+# Convex runs in the cloud, so it can only reach this n8n's webhook through a
+# tunnel (see the README, step 6e). n8n's own calls to Convex need no tunnel.
+# The Resend API key is not set here: it goes in an n8n credential (README, step 6c).
 services:
   n8n:
     image: docker.n8n.io/n8nio/n8n:latest
@@ -5,17 +10,22 @@ services:
     ports:
       - "5678:5678"
     environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=changeme
-      - N8N_HMAC_SECRET=${N8N_HMAC_SECRET}
-      - CONVEX_SITE_URL=${NEXT_PUBLIC_CONVEX_URL}
-      - LENDLOOP_CALLBACK_URL=http://host.docker.internal:4391
+      # Read by the LendLoop workflows with $env.
+      - CONVEX_SITE_URL=${NEXT_PUBLIC_CONVEX_SITE_URL}
+      - CONVEX_TO_N8N_SECRET=${CONVEX_TO_N8N_SECRET}
+      - N8N_TO_CONVEX_SECRET=${N8N_TO_CONVEX_SECRET}
+      # Optional sender on a domain verified in Resend. Empty = LendLoop <onboarding@resend.dev>.
+      - LENDLOOP_EMAIL_FROM=${LENDLOOP_EMAIL_FROM:-}
+      # Let workflows read the variables above, and let Code nodes use Node's crypto module.
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - NODE_FUNCTION_ALLOW_BUILTIN=crypto
+      # Data minimization: delete execution data, which holds recipient emails, after 7 days.
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168
+      # Time zone of the daily 9:00 overdue reminder run.
       - GENERIC_TIMEZONE=America/New_York
     volumes:
       - n8n_data:/home/node/.n8n
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
 volumes:
   n8n_data:

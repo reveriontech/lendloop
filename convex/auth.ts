@@ -12,7 +12,13 @@ export async function getUserByClerkId(
     .unique();
 }
 
+export async function requireClerkSubject(ctx: QueryCtx, clerkId: string) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity || identity.subject !== clerkId) throw new Error("Please sign in.");
+}
+
 export async function requireUser(ctx: QueryCtx, clerkId: string): Promise<Doc<"users">> {
+  await requireClerkSubject(ctx, clerkId);
   const user = await getUserByClerkId(ctx, clerkId);
   if (!user) throw new Error("User not found. Please sign in.");
   return user;
@@ -45,6 +51,7 @@ export const upsertUser = mutation({
     email: v.string(),
   },
   handler: async (ctx, args) => {
+    await requireClerkSubject(ctx, args.clerkId);
     const existing = await getUserByClerkId(ctx, args.clerkId);
     if (existing) {
       await ctx.db.patch(existing._id, { name: args.name, email: args.email });
@@ -64,6 +71,7 @@ export const upsertUser = mutation({
 export const getMe = query({
   args: { clerkId: v.string() },
   handler: async (ctx, args) => {
+    await requireClerkSubject(ctx, args.clerkId);
     return getUserByClerkId(ctx, args.clerkId);
   },
 });

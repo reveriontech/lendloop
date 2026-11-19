@@ -1,28 +1,50 @@
 {
-  "name": "LendLoop - Borrow Request Notification",
+  "name": "LendLoop - Request notification",
   "nodes": [
+    {
+      "parameters": {
+        "content": "## LendLoop: request notification\nConvex POSTs a signed event here when a borrow request is created or changes status. This workflow verifies it, answers right away, skips duplicates, notifies the one person concerned and logs the result in LendLoop.\n\n**Set on the n8n server:** `CONVEX_SITE_URL`, `CONVEX_TO_N8N_SECRET`, `N8N_TO_CONVEX_SECRET`, `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`, `NODE_FUNCTION_ALLOW_BUILTIN=crypto` (see the README).\n\n**Email:** create a *Header Auth* credential named *Resend API* (Name `Authorization`, Value `Bearer re_…`) and select it in the Resend node. Optional: `LENDLOOP_EMAIL_FROM` on the n8n server, for a sender on your verified Resend domain (default `LendLoop <onboarding@resend.dev>`, which only delivers to your own Resend account address).\n\n**After import:** Settings → Error workflow → *LendLoop - Error handler*. Then activate it, and set the production URL of *Convex event webhook* as `N8N_WEBHOOK_URL` on Convex.",
+        "height": 400,
+        "width": 560
+      },
+      "id": "d21b7a2f-40b9-4b0c-8108-cd35bdc97d37",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -500
+      ]
+    },
     {
       "parameters": {
         "httpMethod": "POST",
         "path": "lendloop-borrow-webhook",
+        "responseMode": "responseNode",
         "options": {}
       },
-      "id": "webhook-trigger",
-      "name": "Webhook Trigger",
+      "id": "696bf968-f33b-418c-bc77-c075fc59bf2e",
+      "name": "Convex event webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [250, 300],
-      "webhookId": "lendloop-borrow-webhook"
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "dc87914f-37ed-4b6c-945b-750ab01e699d"
     },
     {
       "parameters": {
-        "jsCode": "const crypto = require('crypto');\n\nconst secret = $env.N8N_HMAC_SECRET;\nconst signature = $input.first().headers['x-signature'];\nconst timestamp = $input.first().headers['x-timestamp'];\nconst body = JSON.stringify($input.first().body);\n\n// Replay protection: reject if older than 5 minutes\nconst age = Math.abs(Date.now() - parseInt(timestamp, 10));\nif (age > 5 * 60 * 1000) {\n  throw new Error('Request expired (replay protection)');\n}\n\nconst data = `${timestamp}.${body}`;\nconst expected = crypto.createHmac('sha256', secret).update(data).digest('hex');\n\nconst sigBuf = Buffer.from(signature, 'hex');\nconst expectedBuf = Buffer.from(expected, 'hex');\n\nif (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {\n  throw new Error('Invalid HMAC signature');\n}\n\nreturn [{ json: { ...($input.first().body), verified: true } }];"
+        "jsCode": "// Checks that Convex sent this event. Convex signs `${timestamp}.${body}` with\n// HMAC-SHA256 and CONVEX_TO_N8N_SECRET, an environment variable on this n8n server.\n// The webhook hands over the parsed JSON body. JSON.stringify gives back exactly\n// the string Convex signed, because Convex built that string with JSON.stringify.\nconst crypto = require('crypto');\n\nconst secret = $env.CONVEX_TO_N8N_SECRET;\nif (!secret) throw new Error('CONVEX_TO_N8N_SECRET is not set on the n8n server');\n\nconst { headers = {}, body = {} } = $input.first().json;\nconst timestamp = String(headers['x-lendloop-timestamp'] ?? '');\nconst signature = String(headers['x-lendloop-signature'] ?? '');\n\nfunction problem() {\n  if (!/^\\d+$/.test(timestamp)) return 'missing timestamp';\n  if (Math.abs(Date.now() - Number(timestamp)) > 5 * 60 * 1000) return 'timestamp older than 5 minutes';\n  if (!/^[0-9a-f]{64}$/i.test(signature)) return 'missing signature';\n  const expected = crypto.createHmac('sha256', secret).update(`${timestamp}.${JSON.stringify(body)}`).digest();\n  return crypto.timingSafeEqual(expected, Buffer.from(signature, 'hex')) ? null : 'signature mismatch';\n}\n\nconst reason = problem();\nreturn [{ json: reason ? { valid: false, reason } : { valid: true, ...body } }];"
       },
-      "id": "verify-hmac",
-      "name": "Verify HMAC Signature",
+      "id": "77e11401-28ae-4a65-912c-9627de3c31f5",
+      "name": "Verify signature",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [470, 300]
+      "position": [
+        220,
+        0
+      ]
     },
     {
       "parameters": {
@@ -30,16 +52,18 @@
           "options": {
             "caseSensitive": true,
             "leftValue": "",
-            "typeValidation": "strict"
+            "typeValidation": "strict",
+            "version": 2
           },
           "conditions": [
             {
-              "id": "cond1",
-              "leftValue": "={{ $json.event }}",
-              "rightValue": "borrow_request_created",
+              "id": "f3d01d9f-98d2-45f4-a427-2e21ae0b4f18",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
               "operator": {
-                "type": "string",
-                "operation": "equals"
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
               }
             }
           ],
@@ -47,80 +71,273 @@
         },
         "options": {}
       },
-      "id": "route-event",
-      "name": "Route by Event",
+      "id": "98950e25-ac5e-41b5-baa6-d55baedd83f7",
+      "name": "Signature valid?",
       "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [690, 300]
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const event = $input.first().json.event;\nconst requestId = $input.first().json.requestId;\nconst toolId = $input.first().json.toolId;\n\nlet subject, message;\n\nswitch (event) {\n  case 'borrow_request_created':\n    subject = 'New Borrow Request';\n    message = `A new borrow request (${requestId}) was created for tool ${toolId}.`;\n    break;\n  case 'borrow_request_approved':\n    subject = 'Borrow Request Approved';\n    message = `Borrow request ${requestId} has been approved.`;\n    break;\n  case 'borrow_request_declined':\n    subject = 'Borrow Request Declined';\n    message = `Borrow request ${requestId} has been declined.`;\n    break;\n  case 'loan_started':\n    subject = 'Loan Started';\n    message = `The tool for request ${requestId} has been picked up.`;\n    break;\n  case 'loan_returned':\n    subject = 'Tool Returned';\n    message = `The tool for request ${requestId} has been returned.`;\n    break;\n  default:\n    subject = `LendLoop Event: ${event}`;\n    message = `Event ${event} for request ${requestId}.`;\n}\n\nreturn [{ json: { subject, message, event, requestId, toolId, timestamp: new Date().toISOString() } }];"
+        "respondWith": "json",
+        "responseBody": "{\"error\":\"invalid signature\"}",
+        "options": {
+          "responseCode": 401
+        }
       },
-      "id": "format-notification",
-      "name": "Format Notification",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [910, 200]
+      "id": "a8991065-0263-4535-a6b5-05948570f3bd",
+      "name": "Reject (401)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        160
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const event = $input.first().json.event;\nconst requestId = $input.first().json.requestId;\n\nreturn [{ json: { subject: `LendLoop: ${event}`, message: `Status change event '${event}' for request ${requestId}.`, event, requestId, timestamp: new Date().toISOString() } }];"
+        "respondWith": "json",
+        "responseBody": "{\"accepted\":true}",
+        "options": {
+          "responseCode": 202
+        }
       },
-      "id": "format-status-change",
-      "name": "Format Status Change",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [910, 400]
+      "id": "e2e48940-f9c9-403d-8f40-d0e7f7405ce0",
+      "name": "Accept (202)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        -100
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Mock notification logger — replace with email/Slack/Discord node in production\nconst data = $input.first().json;\nconsole.log(`[LendLoop Notification] ${data.subject}: ${data.message}`);\nreturn [{ json: { ...data, notified: true, notifiedAt: new Date().toISOString(), channel: 'mock_log' } }];"
+        "operation": "removeItemsSeenInPreviousExecutions",
+        "dedupeValue": "={{ $json.eventId }}",
+        "options": {}
       },
-      "id": "send-notification",
-      "name": "Send Notification (Mock)",
+      "id": "69fe7391-0071-41c4-9cc7-72eadc656494",
+      "name": "Skip already-handled events",
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Writes the message from the minimal payload Convex sends: the recipient's first\n// name and email, the tool name and the loan dates. Nothing else about either\n// person reaches n8n.\nconst { eventId, type, requestId, recipient, tool, loan } = $json;\nconst hi = `Hi ${recipient.name},`;\nconst dates = `${loan.startDate} to ${loan.endDate}`;\n\nconst messages = {\n  'request.created': {\n    subject: `New request to borrow your ${tool.name}`,\n    text: `${hi} a neighbor would like to borrow your ${tool.name} from ${dates}. Open LendLoop to approve or decline it.`,\n    activity: 'Lender notified of the new request',\n  },\n  'request.cancelled': {\n    subject: `Request for your ${tool.name} cancelled`,\n    text: `${hi} the request to borrow your ${tool.name} from ${dates} was cancelled. You don't need to do anything.`,\n    activity: 'Lender notified of the cancellation',\n  },\n  'request.approved': {\n    subject: `Approved: ${tool.name}`,\n    text: `${hi} your request to borrow the ${tool.name} from ${dates} was approved. Arrange the pickup with the lender on LendLoop.`,\n    activity: 'Borrower notified of the approval',\n  },\n  'request.declined': {\n    subject: `Declined: ${tool.name}`,\n    text: `${hi} your request to borrow the ${tool.name} from ${dates} was declined.${loan.declineReason ? ` Reason: ${loan.declineReason}` : ''}`,\n    activity: 'Borrower notified of the decline',\n  },\n  'loan.borrowed': {\n    subject: `You have the ${tool.name}`,\n    text: `${hi} enjoy the ${tool.name}. Please return it by ${loan.dueDate}.`,\n    activity: 'Borrower reminded of the due date',\n  },\n  'loan.returned': {\n    subject: `Thanks for returning the ${tool.name}`,\n    text: `${hi} the lender marked the ${tool.name} as returned. Thanks for borrowing on LendLoop.`,\n    activity: 'Borrower sent the return confirmation',\n  },\n};\n\nconst message = messages[type];\nif (!message) throw new Error(`Unknown LendLoop event type: ${type}`);\nreturn { json: { eventId, requestId, type, to: recipient.email, ...message } };"
+      },
+      "id": "93b83a89-cefe-41fb-b409-bf2f5f1c828d",
+      "name": "Compose message",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1130, 300]
+      "position": [
+        1100,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ 'notify-' + $json.eventId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: $env.LENDLOOP_EMAIL_FROM || 'LendLoop <onboarding@resend.dev>', to: [$json.to], subject: $json.subject, text: $json.text }) }}",
+        "options": {
+          "timeout": 10000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 600
+            }
+          }
+        }
+      },
+      "id": "ada3eb48-2a70-4227-a7ed-4dd13b5d2b6a",
+      "name": "Send email (Resend)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        -100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Reports the notification to LendLoop, where it shows on the loan. Reads the\n// message from \"Compose message\", because $json here is Resend's response.\n// The key comes from the Convex event id, so a retried or duplicated delivery\n// updates the same log entry instead of adding one. Signed with N8N_TO_CONVEX_SECRET.\nconst crypto = require('crypto');\n\nconst secret = $env.N8N_TO_CONVEX_SECRET;\nif (!secret) throw new Error('N8N_TO_CONVEX_SECRET is not set on the n8n server');\n\nconst message = $('Compose message').item.json;\nconst body = JSON.stringify({\n  idempotencyKey: `notify:${message.eventId}`,\n  borrowRequestId: message.requestId,\n  type: 'notification',\n  status: 'sent',\n  message: message.activity,\n});\nconst timestamp = String(Date.now());\nconst signature = crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');\nreturn { json: { body, timestamp, signature } };"
+      },
+      "id": "c7031d65-117c-4242-b71c-d299b7e8af11",
+      "name": "Sign activity log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/api/automation-log",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "3dedfda8-0581-47a3-b27a-5945ca6f3492",
+      "name": "Log activity in LendLoop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        -100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     }
   ],
   "connections": {
-    "Webhook Trigger": {
+    "Convex event webhook": {
       "main": [
-        [{ "node": "Verify HMAC Signature", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Verify HMAC Signature": {
+    "Verify signature": {
       "main": [
-        [{ "node": "Route by Event", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Route by Event": {
+    "Signature valid?": {
       "main": [
-        [{ "node": "Format Notification", "type": "main", "index": 0 }],
-        [{ "node": "Format Status Change", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Accept (202)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject (401)",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Format Notification": {
+    "Accept (202)": {
       "main": [
-        [{ "node": "Send Notification (Mock)", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Skip already-handled events",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Format Status Change": {
+    "Skip already-handled events": {
       "main": [
-        [{ "node": "Send Notification (Mock)", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Compose message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose message": {
+      "main": [
+        [
+          {
+            "node": "Send email (Resend)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send email (Resend)": {
+      "main": [
+        [
+          {
+            "node": "Sign activity log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign activity log": {
+      "main": [
+        [
+          {
+            "node": "Log activity in LendLoop",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
+  "active": false,
+  "pinData": {},
   "settings": {
     "executionOrder": "v1",
     "saveManualExecutions": true,
-    "callerPolicy": "workflowsFromSameOwner",
-    "errorWorkflow": "lendloop-error-workflow"
+    "saveDataErrorExecution": "all"
   },
-  "pinData": {},
-  "tags": [
-    { "name": "LendLoop" },
-    { "name": "notifications" }
-  ]
+  "tags": []
 }

@@ -1,99 +1,121 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+import {
+  daysBetween,
+  listOverdueForReminder,
+  overdueReminderKey,
+  recordAutomationLog,
+  recordWorkflowFailure,
+} from "../convex/automation";
+import { fakeDb, handlerOf } from "./helpers";
 
 /*
- * Idempotency tests for the automation log write-back pattern.
- *
- * The Convex writeAutomationLog mutation uses an idempotency key index to
- * prevent duplicate records. These tests verify the key generation logic
- * and deduplication behavior.
+ * n8n retries write-backs, and a workflow can be re-run by hand. These tests run
+ * the real Convex handlers against an in-memory database to show that neither
+ * creates a duplicate record or a second reminder.
  */
 
-function generateIdempotencyKey(
-  type: string,
-  borrowRequestId: string,
-  date: string
-): string {
-  return `${type}-${borrowRequestId}-${date}`;
+const log = {
+  idempotencyKey: "overdue:req_1:2026-11-19",
+  borrowRequestId: "req_1",
+  type: "overdue_reminder",
+  status: "sent",
+  message: "Overdue reminder sent to the borrower (2 days late)",
+};
+
+function withRequest() {
+  return fakeDb({ borrowRequests: [{ _id: "req_1" }] });
 }
 
-// Simulates the Convex idempotency check
-class IdempotencyStore {
-  private keys = new Set<string>();
-
-  insert(key: string): { inserted: boolean } {
-    if (this.keys.has(key)) {
-      return { inserted: false };
-    }
-    this.keys.add(key);
-    return { inserted: true };
-  }
-
-  has(key: string): boolean {
-    return this.keys.has(key);
-  }
-}
-
-describe("Idempotency Key Generation", () => {
-  it("generates consistent keys for the same inputs", () => {
-    const key1 = generateIdempotencyKey("overdue_reminder", "req_123", "2026-06-15");
-    const key2 = generateIdempotencyKey("overdue_reminder", "req_123", "2026-06-15");
-    expect(key1).toBe(key2);
+describe("activity log write-back", () => {
+  it("stores a retried write-back once", async () => {
+    const { db, rows } = withRequest();
+    const first = await handlerOf(recordAutomationLog)({ db }, log);
+    const second = await handlerOf(recordAutomationLog)({ db }, log);
+    expect(second).toBe(first);
+    expect(rows("automationLogs")).toHaveLength(1);
   });
 
-  it("generates different keys for different dates", () => {
-    const key1 = generateIdempotencyKey("overdue_reminder", "req_123", "2026-06-15");
-    const key2 = generateIdempotencyKey("overdue_reminder", "req_123", "2026-06-16");
-    expect(key1).not.toBe(key2);
+  it("upgrades a failed reminder to sent when a re-run succeeds, but never the reverse", async () => {
+    const { db, rows } = withRequest();
+    await handlerOf(recordAutomationLog)({ db }, { ...log, status: "failed", message: "Overdue reminder could not be sent" });
+    await handlerOf(recordAutomationLog)({ db }, log);
+    expect(rows("automationLogs")).toEqual([expect.objectContaining({ status: "sent", message: log.message })]);
+
+    await handlerOf(recordAutomationLog)({ db }, { ...log, status: "failed", message: "late failure" });
+    expect(rows("automationLogs")).toEqual([expect.objectContaining({ status: "sent", message: log.message })]);
   });
 
-  it("generates different keys for different request IDs", () => {
-    const key1 = generateIdempotencyKey("overdue_reminder", "req_123", "2026-06-15");
-    const key2 = generateIdempotencyKey("overdue_reminder", "req_456", "2026-06-15");
-    expect(key1).not.toBe(key2);
-  });
-
-  it("generates different keys for different types", () => {
-    const key1 = generateIdempotencyKey("overdue_reminder", "req_123", "2026-06-15");
-    const key2 = generateIdempotencyKey("status_change", "req_123", "2026-06-15");
-    expect(key1).not.toBe(key2);
+  it("refuses logs for borrow requests that don't exist", async () => {
+    const { db, rows } = withRequest();
+    expect(await handlerOf(recordAutomationLog)({ db }, { ...log, borrowRequestId: "req_unknown" })).toBeNull();
+    expect(rows("automationLogs")).toHaveLength(0);
   });
 });
 
-describe("Idempotency Store (simulating Convex behavior)", () => {
-  it("accepts the first write", () => {
-    const store = new IdempotencyStore();
-    const key = generateIdempotencyKey("overdue_reminder", "req_123", "2026-06-15");
-    const result = store.insert(key);
-    expect(result.inserted).toBe(true);
+describe("overdue reminders", () => {
+  function withLoans() {
+    return fakeDb({
+      users: [
+        { _id: "borrower_1", name: "Sam Lee", email: "sam@example.com" },
+        { _id: "lender_1", name: "Alex Rivera", email: "alex@example.com" },
+      ],
+      tools: [{ _id: "tool_1", name: "Cordless drill" }],
+      borrowRequests: [
+        { _id: "req_1", status: "borrowed", dueDate: "2026-11-17", borrowerId: "borrower_1", lenderId: "lender_1", toolId: "tool_1" },
+        { _id: "req_2", status: "borrowed", dueDate: "2026-11-19", borrowerId: "borrower_1", lenderId: "lender_1", toolId: "tool_1" },
+        { _id: "req_3", status: "returned", dueDate: "2026-11-01", borrowerId: "borrower_1", lenderId: "lender_1", toolId: "tool_1" },
+      ],
+    });
+  }
+  const list = (db: unknown, today: string) =>
+    handlerOf(listOverdueForReminder)({ db }, { today }) as Promise<{ requestId: string }[]>;
+
+  it("lists only loans past due, with the borrower's first name and email and nothing about the lender", async () => {
+    const { db } = withLoans();
+    const loans = await list(db, "2026-11-19");
+    expect(loans).toEqual([{
+      requestId: "req_1",
+      idempotencyKey: "overdue:req_1:2026-11-19",
+      borrower: { name: "Sam", email: "sam@example.com" },
+      toolName: "Cordless drill",
+      dueDate: "2026-11-17",
+      daysOverdue: 2,
+    }]);
+    expect(JSON.stringify(loans)).not.toContain("alex@example.com");
   });
 
-  it("rejects duplicate writes with the same key", () => {
-    const store = new IdempotencyStore();
-    const key = generateIdempotencyKey("overdue_reminder", "req_123", "2026-06-15");
-
-    const first = store.insert(key);
-    const second = store.insert(key);
-
-    expect(first.inserted).toBe(true);
-    expect(second.inserted).toBe(false);
+  it("leaves out loans already reminded today, so a re-run sends nothing new", async () => {
+    const { db } = withLoans();
+    await handlerOf(recordAutomationLog)({ db }, log);
+    expect(await list(db, "2026-11-19")).toEqual([]);
   });
 
-  it("allows same request on different days (new key)", () => {
-    const store = new IdempotencyStore();
-    const key1 = generateIdempotencyKey("overdue_reminder", "req_123", "2026-06-15");
-    const key2 = generateIdempotencyKey("overdue_reminder", "req_123", "2026-06-16");
-
-    expect(store.insert(key1).inserted).toBe(true);
-    expect(store.insert(key2).inserted).toBe(true);
+  it("lists a loan again if today's reminder failed, and again the next day", async () => {
+    const { db } = withLoans();
+    await handlerOf(recordAutomationLog)({ db }, { ...log, status: "failed", message: "Overdue reminder could not be sent" });
+    expect(await list(db, "2026-11-19")).toHaveLength(1);
+    await handlerOf(recordAutomationLog)({ db }, log);
+    // The next day brings a new key for req_1, and req_2 (due on the 19th) is now overdue too.
+    expect(await list(db, "2026-11-20")).toEqual([
+      expect.objectContaining({ idempotencyKey: "overdue:req_1:2026-11-20" }),
+      expect.objectContaining({ idempotencyKey: "overdue:req_2:2026-11-20" }),
+    ]);
   });
 
-  it("handles multiple retries gracefully", () => {
-    const store = new IdempotencyStore();
-    const key = generateIdempotencyKey("overdue_reminder", "req_123", "2026-06-15");
+  it("builds one key per loan per day and counts days between dates", () => {
+    expect(overdueReminderKey("req_1", "2026-11-19")).toBe(overdueReminderKey("req_1", "2026-11-19"));
+    expect(overdueReminderKey("req_1", "2026-11-19")).not.toBe(overdueReminderKey("req_1", "2026-11-20"));
+    expect(daysBetween("2026-11-17", "2026-11-19")).toBe(2);
+    expect(daysBetween("2026-02-28", "2026-03-01")).toBe(1);
+  });
+});
 
-    expect(store.insert(key).inserted).toBe(true);
-    expect(store.insert(key).inserted).toBe(false);
-    expect(store.insert(key).inserted).toBe(false);
-    expect(store.insert(key).inserted).toBe(false);
+describe("workflow failure reports", () => {
+  it("stores one record per failed n8n execution, however often the report is retried", async () => {
+    const { db, rows } = fakeDb();
+    const report = { idempotencyKey: "n8n-error:7:231", workflowName: "LendLoop - Overdue reminders", message: "Request failed" };
+    const first = await handlerOf(recordWorkflowFailure)({ db }, report);
+    expect(await handlerOf(recordWorkflowFailure)({ db }, report)).toBe(first);
+    expect(rows("automationFailures")).toHaveLength(1);
   });
 });

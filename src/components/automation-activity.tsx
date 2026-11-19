@@ -20,11 +20,11 @@ export function AutomationActivity({
         Automation Activity
       </p>
       <ul className="space-y-1">
-        {logs.slice(-3).map((log) => (
-          <li key={log._id} className="text-xs text-muted-foreground">
+        {logs.slice(0, 3).map((log) => (
+          <li key={log._id} className={log.status === "failed" ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
             {log.message}{" "}
             <span className="opacity-60">
-              {formatDistanceToNow(log.createdAt, { addSuffix: true })}
+              {formatDistanceToNow(log.updatedAt, { addSuffix: true })}
             </span>
           </li>
         ))}
