@@ -4,7 +4,7 @@ A neighborhood tool-lending board where neighbors list tools they're willing to 
 
 ## Stack
 
-- **Next.js 16** (App Router): frontend
+- **Next.js 16** (App Router): frontend, deployed to Cloudflare Workers with OpenNext
 - **Clerk**: authentication
 - **Convex**: database, backend logic, real-time subscriptions, and the automation outbox
 - **n8n**: workflow automation (self-hosted, or the bundled Docker Compose file)
@@ -200,6 +200,44 @@ Use the production URL (`/webhook/`), not the test URL (`/webhook-test/`). If n8
 - **Request notification:** request to borrow a tool from a second account. Within seconds, the lender gets an email titled "New request to borrow your …", and the request on **Incoming requests** shows "Lender notified of the new request".
 - **Overdue reminders:** open the workflow and run it manually. It emails every borrower whose loan is past due and still marked borrowed. Run it again: Convex returns nothing, because those borrowers have already been reminded today.
 - **Failures:** **Admin → Automation** lists events Convex couldn't deliver and n8n runs that failed.
+
+## Deploy to Cloudflare
+
+The Next.js app runs on Cloudflare Workers through [OpenNext](https://opennext.js.org/cloudflare) (`@opennextjs/cloudflare`, configured in [wrangler.jsonc](wrangler.jsonc) and [open-next.config.ts](open-next.config.ts)). Convex and n8n stay where they are. The deployed app talks to Convex, and n8n only talks to Convex, so neither needs any change.
+
+Next.js bakes these three values into the build, so they must be set wherever the build runs:
+
+| Variable | Value |
+|---|---|
+| `NEXT_PUBLIC_CONVEX_URL` | The `.convex.cloud` URL of the deployment the live app should use |
+| `NEXT_PUBLIC_CONVEX_SITE_URL` | The matching `.convex.site` URL |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk → API Keys |
+
+The Worker needs no runtime secrets, because Clerk only runs in the browser in this app.
+
+### From your machine
+
+```bash
+npx wrangler login
+npm run deploy
+```
+
+`npm run deploy` builds the app with the values from `.env.local` and uploads it. It prints the address, `https://lendloop.<your-subdomain>.workers.dev`. To try the Worker locally first, run `npm run preview`.
+
+On Windows, run these in WSL. OpenNext warns that Windows isn't fully supported, although the build works there.
+
+### From GitHub, with Cloudflare building each push
+
+1. In the Cloudflare dashboard, open **Workers & Pages → Create → Import a repository** and choose this repository.
+2. Keep the project name `lendloop`, matching `name` in `wrangler.jsonc`.
+3. Set **Build command** to `npx opennextjs-cloudflare build` and **Deploy command** to `npx opennextjs-cloudflare deploy`.
+4. Under **Settings → Build → Variables and secrets**, add the three `NEXT_PUBLIC_*` variables above.
+
+### After the first deploy
+
+- **Custom domain:** in the Worker's **Settings → Domains & Routes**, add a domain on a Cloudflare zone you own.
+- **Clerk:** development keys work on any address but show a "Development mode" badge. For a public launch, create a Clerk production instance on your domain, and use its publishable key. Then set `CLERK_JWT_ISSUER_DOMAIN` on Convex to its Frontend API URL.
+- **Convex:** the live app uses whichever deployment `NEXT_PUBLIC_CONVEX_URL` points to. For a separate production backend, run `npx convex deploy`, set the same env vars with `npx convex env set --prod …`, build with the production URLs, and change `CONVEX_SITE_URL` on the n8n server to the production `.convex.site` URL.
 
 ## Troubleshooting
 
