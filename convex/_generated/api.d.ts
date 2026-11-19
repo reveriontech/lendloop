@@ -10,8 +10,12 @@
 
 import type * as admin from "../admin.js";
 import type * as auth from "../auth.js";
+import type * as automation from "../automation.js";
 import type * as borrowRequests from "../borrowRequests.js";
 import type * as http from "../http.js";
+import type * as listingPhoto from "../listingPhoto.js";
+import type * as loanDates from "../loanDates.js";
+import type * as signing from "../signing.js";
 import type * as tools from "../tools.js";
 
 import type {
@@ -23,8 +27,12 @@ import type {
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
   auth: typeof auth;
+  automation: typeof automation;
   borrowRequests: typeof borrowRequests;
   http: typeof http;
+  listingPhoto: typeof listingPhoto;
+  loanDates: typeof loanDates;
+  signing: typeof signing;
   tools: typeof tools;
 }>;
 

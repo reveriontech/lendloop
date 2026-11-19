@@ -21,6 +21,11 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <ClerkProvider
       publishableKey={process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY!}
+      localization={{
+        formFieldInputPlaceholder__emailAddress: "you@example.com",
+        formFieldInputPlaceholder__emailAddress_username: "you@example.com",
+        signIn: { start: { title: "Sign in", subtitle: "Sign in or create an account to lend and borrow tools.", actionText: "New to LendLoop?", actionLink: "Create an account" } },
+      }}
       dynamic
     >
       <ConvexClientProvider>{children}</ConvexClientProvider>

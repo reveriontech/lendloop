@@ -23,10 +23,6 @@
 # misc
 .DS_Store
 *.pem
-.env
-.env.local
-.env.example
-
 
 # debug
 npm-debug.log*
@@ -34,9 +30,11 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
+# env files: ignore every .env* file (.env, .env.local, .env.production, ...)
+# except the committed template, which holds placeholders only
 .env*
 !.env.example
+.env.local
 
 # vercel
 .vercel

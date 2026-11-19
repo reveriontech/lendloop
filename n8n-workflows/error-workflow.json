@@ -1,39 +1,113 @@
 {
-  "name": "LendLoop - Error Workflow",
+  "name": "LendLoop - Error handler",
   "nodes": [
     {
+      "parameters": {
+        "content": "## LendLoop: error handler\nSelect this as the Error workflow of the other two LendLoop workflows. When one fails after its retries, this logs the error and reports it to LendLoop, where it shows on the Admin page. If the report itself fails, the run stays failed in n8n's execution list.\n\n**Set on the n8n server:** `CONVEX_SITE_URL`, `CONVEX_TO_N8N_SECRET`, `N8N_TO_CONVEX_SECRET`, `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`, `NODE_FUNCTION_ALLOW_BUILTIN=crypto` (see the README).",
+        "height": 280,
+        "width": 560
+      },
+      "id": "a77f3b5b-9dc2-44f3-ba2b-ae8c658c8ffe",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -400
+      ]
+    },
+    {
       "parameters": {},
-      "id": "error-trigger",
-      "name": "Error Trigger",
+      "id": "9bf14fbe-ea00-466b-bb16-06443e9b7350",
+      "name": "On workflow error",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
-      "position": [250, 300]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const error = $input.first().json;\n\nconst summary = {\n  workflowName: error.workflow?.name || 'Unknown',\n  workflowId: error.workflow?.id || 'Unknown',\n  executionId: error.execution?.id || 'Unknown',\n  errorMessage: error.execution?.error?.message || 'No error message',\n  errorNode: error.execution?.lastNodeExecuted || 'Unknown',\n  timestamp: new Date().toISOString(),\n  retryUrl: error.execution?.url || null\n};\n\nconsole.error(`[LendLoop Error] Workflow '${summary.workflowName}' failed at node '${summary.errorNode}': ${summary.errorMessage}`);\n\nreturn [{ json: summary }];"
+        "jsCode": "// Runs when a LendLoop workflow fails after its retries. Logs the failure here and\n// reports it to LendLoop, where it shows on the Admin page.\n// n8n sends `execution`, or `trigger` when the failing workflow's trigger broke.\nconst crypto = require('crypto');\n\nconst secret = $env.N8N_TO_CONVEX_SECRET;\nif (!secret) throw new Error('N8N_TO_CONVEX_SECRET is not set on the n8n server');\n\nconst { execution, trigger, workflow = {} } = $input.first().json;\nconst error = execution?.error ?? trigger?.error ?? {};\nconst executionId = execution?.id != null ? String(execution.id) : undefined;\nconst report = {\n  // One report per failed execution, however many times this request is retried.\n  idempotencyKey: `n8n-error:${workflow.id ?? 'unknown'}:${executionId ?? Date.now()}`,\n  workflowName: String(workflow.name ?? 'Unknown workflow'),\n  message: String(error.message ?? 'Unknown error').slice(0, 500),\n  ...(execution?.lastNodeExecuted ? { nodeName: String(execution.lastNodeExecuted) } : {}),\n  ...(executionId ? { executionId } : {}),\n  ...(execution?.url ? { executionUrl: String(execution.url) } : {}),\n};\nconsole.error(`[LendLoop] ${report.workflowName} failed at ${report.nodeName ?? 'its trigger'}: ${report.message}`);\n\nconst body = JSON.stringify(report);\nconst timestamp = String(Date.now());\nconst signature = crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');\nreturn [{ json: { body, timestamp, signature } }];"
       },
-      "id": "log-error",
-      "name": "Log Error Details",
+      "id": "00835400-e73d-4e89-b9c2-2dba999d7190",
+      "name": "Build failure report",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [470, 300]
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/api/automation-failure",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "f2973aaa-c380-447e-8b9f-2b372103ffe7",
+      "name": "Report failure to LendLoop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     }
   ],
   "connections": {
-    "Error Trigger": {
+    "On workflow error": {
       "main": [
-        [{ "node": "Log Error Details", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Build failure report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build failure report": {
+      "main": [
+        [
+          {
+            "node": "Report failure to LendLoop",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
+  "active": false,
+  "pinData": {},
   "settings": {
     "executionOrder": "v1",
-    "saveManualExecutions": true
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all"
   },
-  "pinData": {},
-  "tags": [
-    { "name": "LendLoop" },
-    { "name": "error-handling" }
-  ]
+  "tags": []
 }
